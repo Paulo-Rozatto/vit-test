@@ -15,23 +15,6 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 
-def patchify(images, n_patches):
-    n, c, h, w = images.shape
-
-    assert h == w, "Patchify method is implemented for square images only"
-
-    patches = torch.zeros(n, n_patches ** 2, h * w * c // n_patches ** 2)
-    patch_size = h // n_patches
-
-    for idx, image in enumerate(images):
-        for i in range(n_patches):
-            for j in range(n_patches):
-                patch = image[:, i * patch_size: (i + 1) * patch_size,
-                              j * patch_size: (j + 1) * patch_size]
-                patches[idx, i * n_patches + j] = patch.flatten()
-    return patches
-
-
 def get_positional_embeddings(sequence_length, d):
     result = torch.ones(sequence_length, d)
     for i in range(sequence_length):
@@ -39,6 +22,41 @@ def get_positional_embeddings(sequence_length, d):
             result[i][j] = np.sin(
                 i / (10000 ** (j / d))) if j % 2 == 0 else np.cos(i / (10000 ** ((j - 1) / d)))
     return result
+
+
+class PatchEmbed(nn.Module):
+    """
+    Image to Patch Embedding.
+    https://github.com/facebookresearch/segment-anything/blob/6fdee8f2727f4506cfbbe553e23b895e27956588/segment_anything/modeling/image_encoder.py#L364
+    """
+
+    def __init__(
+        self,
+        kernel_size=(4, 4),
+        stride=(4, 4),
+        padding=(0, 0),
+        in_chans: int = 1,
+        embed_dim: int = 16,
+    ) -> None:
+        """
+        Args:
+            kernel_size (Tuple): kernel size of the projection layer.
+            stride (Tuple): stride of the projection layer.
+            padding (Tuple): padding size of the projection layer.
+            in_chans (int): Number of input image channels.
+            embed_dim (int): Patch embedding dimension.
+        """
+        super().__init__()
+
+        self.proj = nn.Conv2d(
+            in_chans, embed_dim, kernel_size=kernel_size, stride=stride, padding=padding
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.proj(x)
+        # B C H W -> B H W C
+        x = x.permute(0, 2, 3, 1)
+        return x
 
 
 class MyMSA(nn.Module):
@@ -113,9 +131,8 @@ class MyViT(nn.Module):
         assert chw[2] % n_patches == 0, "Input shape not entirely divisible by number of patches"
         self.patch_size = (chw[1] // n_patches, chw[2] // n_patches)
 
-        # Linear mapper
-        self.input_d = int(chw[0] * self.patch_size[0] * self.patch_size[1])
-        self.linear_mapper = nn.Linear(self.input_d, self.hidden_d)
+        # Patcher and mapper
+        self.patcher = PatchEmbed()
 
         # Learnable classification token
         self.class_token = nn.Parameter(torch.rand(1, self.hidden_d))
@@ -135,8 +152,7 @@ class MyViT(nn.Module):
         )
 
     def forward(self, images):
-        patches = patchify(images, self.n_patches).to(self.pos_embed.device)
-        tokens = self.linear_mapper(patches)
+        tokens = self.patcher(images).flatten(1, 2)
 
         tokens = torch.cat((self.class_token.expand(
             len(tokens), 1, -1), tokens), dim=1)
@@ -170,7 +186,7 @@ if __name__ == "__main__":
     print("Using device: ", device,
           f"({torch.cuda.get_device_name(device)})" if torch.cuda.is_available() else "")
     model = MyViT((1, 28, 28), n_patches=7, n_blocks=2,
-                  hidden_d=8, n_heads=2, out_d=10).to(device)
+                  hidden_d=16, n_heads=2, out_d=10).to(device)
     N_EPOCHS = 5
     LR = 0.005
 
