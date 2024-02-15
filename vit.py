@@ -173,7 +173,7 @@ if __name__ == "__main__":
     # Loading data
     transform = ToTensor()
 
-    train_set = MNIST(root='./datasets', train=False,
+    train_set = MNIST(root='./datasets', train=True,
                       download=True, transform=transform)
     test_set = MNIST(root='./datasets', train=False,
                      download=False, transform=transform)
